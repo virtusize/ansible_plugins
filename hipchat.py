@@ -19,7 +19,7 @@ options:
     required: true
   from:
     description:
-      - Name the message will appear be sent from. max 15 characters. (V1 Only)
+      - Name the message will appear be sent from. max 15 characters.
         Over 15, will be shorten.
     required: false
     default: Ansible
@@ -54,67 +54,90 @@ options:
     default: 'yes'
     choices: ['yes', 'no']
     version_added: 1.5.1
-  version:
-    description:
-      - API version
-    required: false
-    default: 1
-    choices: [ 1, 2 ]
   api:
     description:
       - API url if using a self-hosted hipchat server
     required: false
-    default: 'https://api.hipchat.com'
+    default: 'https://api.hipchat.com/v1'
     version_added: 1.6.0
 
 
-# informational: requirements for nodes
-requirements: [ urllib, urllib2 ]
-author: WAKAYAMA Shirou
+requirements: [ ]
+author: "WAKAYAMA Shirou (@shirou), BOURDEL Paul (@pb8226)"
 '''
 
 EXAMPLES = '''
-- hipchat: version=2 token=AAAAAA room=notify msg="Ansible task finished"
+- hipchat: token=AAAAAA room=notify msg="Ansible task finished"
 '''
 
 # ===========================================
 # HipChat module specific support methods.
 #
 
-MSG_URI = "https://api.hipchat.com"
+import urllib
 
+DEFAULT_URI = "https://api.hipchat.com/v1"
 
-def send_msg(module, token, room, msg_from, msg , msg_format='text',
-             color='yellow', notify=False, version=1, api=MSG_URI):
-    '''sending message to hipchat'''
+MSG_URI_V1 = "/rooms/message"
+
+MSG_URI_V2 = "/room/{id_or_name}/message"
+NOTIFY_URI_V2 = "/room/{id_or_name}/notification"
+
+def send_msg_v1(module, token, room, msg_from, msg, msg_format='text',
+             color='yellow', notify=False, api=MSG_URI_V1):
+    '''sending message to hipchat v1 server'''
+    print "Sending message to v1 server"
 
     params = {}
+    params['room_id'] = room
+    params['from'] = msg_from[:15]  # max length is 15
     params['message'] = msg
     params['message_format'] = msg_format
     params['color'] = color
-    data = ""
-    headers = ""
-    url = api
+    params['api'] = api
 
-    if version == "1":
-        params['room_id'] = room
-        params['api'] = api
-        params['from'] = msg_from[:15]  # max length is 15
-        params['notify'] = int(notify)
+    if notify:
+        params['notify'] = 1
+    else:
+        params['notify'] = 0
 
-        url += "/v1/rooms/message"
-        data = urllib.urlencode(params)
-        headers = {'content-type': 'application/x-www-form-urlencoded'}
+    url = api + MSG_URI_V1 + "?auth_token=%s" % (token)
+    data = urllib.urlencode(params)
 
-    elif version == "2":
-        params['notify'] = notify
+    if module.check_mode:
+        # In check mode, exit before actually sending the message
+        module.exit_json(changed=False)
 
-        url += "/v2/room/" + room + "/notification"
+    response, info = fetch_url(module, url, data=data)
+    if info['status'] == 200:
+        return response.read()
+    else:
+        module.fail_json(msg="failed to send message, return status=%s" % str(info['status']))
 
-        data = json.dumps(params)
-        headers = {'content-type': 'application/json'}
 
-    url += "?auth_token=%s" % (token)
+def send_msg_v2(module, token, room, msg_from, msg, msg_format='text',
+             color='yellow', notify=False, api=MSG_URI_V2):
+    '''sending message to hipchat v2 server'''
+    print "Sending message to v2 server"
+
+    headers = {'Authorization':'Bearer %s' % token, 'Content-Type':'application/json'}
+
+    body = dict()
+    body['message'] = msg
+    body['color'] = color
+    body['message_format'] = msg_format
+
+    if notify:
+        POST_URL = api + NOTIFY_URI_V2
+    else:
+        POST_URL = api + MSG_URI_V2
+
+    url = POST_URL.replace('{id_or_name}',room)
+    data = json.dumps(body)
+
+    if module.check_mode:
+        # In check mode, exit before actually sending the message
+        module.exit_json(changed=False)
 
     response, info = fetch_url(module, url, data=data, headers=headers, method='POST')
     if info['status'] == 200:
@@ -140,8 +163,7 @@ def main():
             msg_format=dict(default="text", choices=["text", "html"]),
             notify=dict(default=True, type='bool'),
             validate_certs=dict(default='yes', type='bool'),
-            version=dict(default='1', choices=['1', '2']),
-            api=dict(default=MSG_URI),
+            api=dict(default=DEFAULT_URI),
         ),
         supports_check_mode=True
     )
@@ -153,12 +175,13 @@ def main():
     color = module.params["color"]
     msg_format = module.params["msg_format"]
     notify = module.params["notify"]
-    version = module.params["version"]
     api = module.params["api"]
 
-
     try:
-        send_msg(module, token, room, msg_from, msg, msg_format, color, notify, version, api)
+        if api.find('/v2') != -1:
+            send_msg_v2(module, token, room, msg_from, msg, msg_format, color, notify, api)
+        else:
+            send_msg_v1(module, token, room, msg_from, msg, msg_format, color, notify, api)
     except Exception, e:
         module.fail_json(msg="unable to send msg: %s" % e)
 
