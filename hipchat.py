@@ -80,7 +80,6 @@ DEFAULT_URI = "https://api.hipchat.com/v1"
 
 MSG_URI_V1 = "/rooms/message"
 
-MSG_URI_V2 = "/room/{id_or_name}/message"
 NOTIFY_URI_V2 = "/room/{id_or_name}/notification"
 
 def send_msg_v1(module, token, room, msg_from, msg, msg_format='text',
@@ -95,11 +94,7 @@ def send_msg_v1(module, token, room, msg_from, msg, msg_format='text',
     params['message_format'] = msg_format
     params['color'] = color
     params['api'] = api
-
-    if notify:
-        params['notify'] = 1
-    else:
-        params['notify'] = 0
+    params['notify'] = int(notify)
 
     url = api + MSG_URI_V1 + "?auth_token=%s" % (token)
     data = urllib.urlencode(params)
@@ -116,7 +111,7 @@ def send_msg_v1(module, token, room, msg_from, msg, msg_format='text',
 
 
 def send_msg_v2(module, token, room, msg_from, msg, msg_format='text',
-             color='yellow', notify=False, api=MSG_URI_V2):
+             color='yellow', notify=False, api=NOTIFY_URI_V2):
     '''sending message to hipchat v2 server'''
     print "Sending message to v2 server"
 
@@ -126,13 +121,11 @@ def send_msg_v2(module, token, room, msg_from, msg, msg_format='text',
     body['message'] = msg
     body['color'] = color
     body['message_format'] = msg_format
+    body['notify'] = notify
 
-    if notify:
-        POST_URL = api + NOTIFY_URI_V2
-    else:
-        POST_URL = api + MSG_URI_V2
+    POST_URL = api + NOTIFY_URI_V2
 
-    url = POST_URL.replace('{id_or_name}',room)
+    url = POST_URL.replace('{id_or_name}', room)
     data = json.dumps(body)
 
     if module.check_mode:
