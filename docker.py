@@ -420,7 +420,6 @@ EXAMPLES = '''
 HAS_DOCKER_PY = True
 DEFAULT_DOCKER_API_VERSION = None
 
-import sys
 import json
 import os
 import shlex
@@ -494,6 +493,7 @@ def get_split_image_tag(image):
 
     return resource, tag
 
+
 def normalize_image(image):
     """
     Normalize a Docker image name to include the implied :latest tag.
@@ -504,8 +504,7 @@ def normalize_image(image):
 
 def is_running(container):
     '''Return True if an inspected container is in a state we consider "running."'''
-
-    return container['State']['Running'] == True and not container['State'].get('Ghost', False)
+    return container['State']['Running'] and not container['State'].get('Ghost', False)
 
 
 def get_docker_py_versioninfo():
@@ -564,20 +563,21 @@ class DockerManager(object):
     # docker-py version is a tuple of ints because we have to compare them
     # server APIVersion is passed to a docker-py function that takes strings
     _cap_ver_req = {
-            'dns': ((0, 3, 0), '1.10'),
-            'volumes_from': ((0, 3, 0), '1.10'),
-            'restart_policy': ((0, 5, 0), '1.14'),
-            'extra_hosts': ((0, 7, 0), '1.3.1'),
-            'pid': ((1, 0, 0), '1.17'),
-            'log_driver': ((1, 2, 0), '1.18'),
-            'host_config': ((0, 7, 0), '1.15'),
-            'cpu_set': ((0, 6, 0), '1.14'),
-            'cap_add': ((0, 5, 0), '1.14'),
-            'cap_drop': ((0, 5, 0), '1.14'),
-            'read_only': ((1, 0, 0), '1.17'),
-            # Clientside only
-            'insecure_registry': ((0, 5, 0), '0.0')
-            }
+        'dns': ((0, 3, 0), '1.10'),
+        'volumes_from': ((0, 3, 0), '1.10'),
+        'restart_policy': ((0, 5, 0), '1.14'),
+        'extra_hosts': ((0, 7, 0), '1.3.1'),
+        'pid': ((1, 0, 0), '1.17'),
+        'log_driver': ((1, 2, 0), '1.18'),
+        'host_config': ((0, 7, 0), '1.15'),
+        'cpu_set': ((0, 6, 0), '1.14'),
+        'cap_add': ((0, 5, 0), '1.14'),
+        'cap_drop': ((0, 5, 0), '1.14'),
+        'read_only': ((1, 0, 0), '1.17'),
+
+        # Clientside only
+        'insecure_registry': ((0, 5, 0), '0.0')
+    }
 
     def __init__(self, module):
         self.module = module
@@ -603,7 +603,7 @@ class DockerManager(object):
                             self.module.fail_json(msg='bind mode needs to either be "ro" or "rw"')
                         else:
                             ro = parts[2] == 'ro'
-                    self.binds[parts[0]] = {'bind': parts[1], 'ro': ro }
+                    self.binds[parts[0]] = {'bind': parts[1], 'ro': ro}
                 else:
                     self.module.fail_json(msg='volumes support 1 to 3 arguments')
 
@@ -743,13 +743,13 @@ class DockerManager(object):
 
         api_version = self.client.version()['ApiVersion']
         self.module.fail_json(msg='Specifying the `%s` parameter requires'
-                ' docker-py: %s, docker server apiversion %s; found'
-                ' docker-py: %s, server: %s' % (
-                    capability,
-                    '.'.join(map(str, self._cap_ver_req[capability][0])),
-                    self._cap_ver_req[capability][1],
-                    '.'.join(map(str, self.docker_py_versioninfo)),
-                    api_version))
+                              ' docker-py: %s, docker server apiversion %s; found'
+                              ' docker-py: %s, server: %s' % (
+                                  capability,
+                                  '.'.join(map(str, self._cap_ver_req[capability][0])),
+                                  self._cap_ver_req[capability][1],
+                                  '.'.join(map(str, self.docker_py_versioninfo)),
+                                  api_version))
 
     def get_links(self, links):
         """
@@ -799,28 +799,24 @@ class DockerManager(object):
             'read_only': self.module.params.get('read_only'),
         }
 
-        optionals = {}
         for optional_param in ('dns', 'volumes_from', 'restart_policy',
-                'restart_policy_retry', 'pid'):
-            optionals[optional_param] = self.module.params.get(optional_param)
+                               'pid', 'extra_hosts', 'log_driver',
+                               'cap_add', 'cap_drop'):
+            if self.module.params.get(optional_param) is not None:
+                self.ensure_capability(optional_param)
 
-        if optionals['dns'] is not None:
-            self.ensure_capability('dns')
-            params['dns'] = optionals['dns']
-
-        if optionals['volumes_from'] is not None:
-            self.ensure_capability('volumes_from')
-            params['volumes_from'] = optionals['volumes_from']
-
-        if optionals['restart_policy'] is not None:
-            self.ensure_capability('restart_policy')
-            params['restart_policy'] = { 'Name': optionals['restart_policy'] }
-            if params['restart_policy']['Name'] == 'on-failure':
-                params['restart_policy']['MaximumRetryCount'] = optionals['restart_policy_retry']
-
-        if optionals['pid'] is not None:
-            self.ensure_capability('pid')
-            params['pid_mode'] = optionals['pid']
+            if optional_param == 'restart_policy':
+                params[optional_param] = {'Name': self.module.params.get(optional_param)}
+                if params[optional_param]['Name'] == 'on-failure':
+                    params[optional_param]['MaximumRetryCount'] = self.module.params.get('restart_policy_retry')
+            elif optional_param == 'log_driver':
+                log_config = docker.utils.LogConfig(type=docker.utils.LogConfig.types.JSON)
+                log_config.type = self.module.params.get(optional_param)
+                params['log_config'] = log_config
+            elif optional_param == 'pid':
+                params['pid_mode'] = self.module.params.get(optional_param)
+            else:
+                params[optional_param] = self.module.params.get(optional_param)
 
         return params
 
@@ -967,7 +963,7 @@ class DockerManager(object):
         running = self.get_running_containers()
         current = self.get_inspect_containers(running)
 
-        #Get API version
+        # Get API version
         api_version = self.client.version()['ApiVersion']
 
         image = self.get_inspect_image()
@@ -1036,7 +1032,7 @@ class DockerManager(object):
             except ValueError as e:
                 self.module.fail_json(msg=str(e))
 
-            #For v1.19 API and above use HostConfig, otherwise use Config
+            # For v1.19 API and above use HostConfig, otherwise use Config
             if api_version >= 1.19:
                 actual_mem = container['HostConfig']['Memory']
             else:
@@ -1171,7 +1167,7 @@ class DockerManager(object):
                     elif isinstance(config[0], tuple):
                         expected_bound_ports[container_port] = []
                         for hostip, hostport in config:
-                            expected_bound_ports[container_port].append({ 'HostIp': hostip, 'HostPort': str(hostport)})
+                            expected_bound_ports[container_port].append({'HostIp': hostip, 'HostPort': str(hostport)})
                     else:
                         expected_bound_ports[container_port] = [{'HostIp': config[0], 'HostPort': str(config[1])}]
 
@@ -1236,7 +1232,7 @@ class DockerManager(object):
 
             # LOG_DRIVER
 
-            if self.ensure_capability('log_driver', False) :
+            if self.ensure_capability('log_driver', False):
                 expected_log_driver = self.module.params.get('log_driver') or 'json-file'
                 actual_log_driver = container['HostConfig']['LogConfig']['Type']
                 if actual_log_driver != expected_log_driver:
@@ -1340,65 +1336,6 @@ class DockerManager(object):
         except Exception as e:
             self.module.fail_json(msg="Failed to pull the specified image: %s" % resource, error=repr(e))
 
-    def create_host_config(self):
-        params = {
-            'lxc_conf': self.lxc_conf,
-            'binds': self.binds,
-            'port_bindings': self.port_bindings,
-            'publish_all_ports': self.module.params.get('publish_all_ports'),
-            'privileged': self.module.params.get('privileged'),
-            'links': self.links,
-            'network_mode': self.module.params.get('net'),
-        }
-
-        optionals = {}
-        for optional_param in ('dns', 'volumes_from', 'restart_policy',
-                'restart_policy_retry', 'pid', 'extra_hosts', 'log_driver',
-                'cap_add', 'cap_drop'):
-            optionals[optional_param] = self.module.params.get(optional_param)
-
-        if optionals['dns'] is not None:
-            self.ensure_capability('dns')
-            params['dns'] = optionals['dns']
-
-        if optionals['volumes_from'] is not None:
-            self.ensure_capability('volumes_from')
-            params['volumes_from'] = optionals['volumes_from']
-
-        if optionals['restart_policy'] is not None:
-            self.ensure_capability('restart_policy')
-            params['restart_policy'] = { 'Name': optionals['restart_policy'] }
-            if params['restart_policy']['Name'] == 'on-failure':
-                params['restart_policy']['MaximumRetryCount'] = optionals['restart_policy_retry']
-
-        # docker_py only accepts 'host' or None
-        if 'pid' in optionals and not optionals['pid']:
-            optionals['pid'] = None
-
-        if optionals['pid'] is not None:
-            self.ensure_capability('pid')
-            params['pid_mode'] = optionals['pid']
-
-        if optionals['extra_hosts'] is not None:
-            self.ensure_capability('extra_hosts')
-            params['extra_hosts'] = optionals['extra_hosts']
-
-        if optionals['log_driver'] is not None:
-            self.ensure_capability('log_driver')
-            log_config = docker.utils.LogConfig(type=docker.utils.LogConfig.types.JSON)
-            log_config.type = optionals['log_driver']
-            params['log_config'] = log_config
-
-        if optionals['cap_add'] is not None:
-            self.ensure_capability('cap_add')
-            params['cap_add'] = optionals['cap_add']
-
-        if optionals['cap_drop'] is not None:
-            self.ensure_capability('cap_drop')
-            params['cap_drop'] = optionals['cap_drop']
-
-        return docker.utils.create_host_config(**params)
-
     def create_containers(self, count=1):
         try:
             mem_limit = _human_to_bytes(self.module.params.get('memory_limit'))
@@ -1418,18 +1355,16 @@ class DockerManager(object):
                   'stdin_open':   self.module.params.get('stdin_open'),
                   'tty':          self.module.params.get('tty'),
                   'cpuset':       self.module.params.get('cpu_set'),
-                  'host_config':  self.create_host_config(),
                   'user':         self.module.params.get('docker_user'),
                   }
         if self.ensure_capability('host_config', fail=False):
             params['host_config'] = self.get_host_config()
 
-        #For v1.19 API and above use HostConfig, otherwise use Config
+        # For v1.19 API and above use HostConfig, otherwise use Config
         if api_version < 1.19:
             params['mem_limit'] = mem_limit
         else:
             params['host_config']['mem_limit'] = mem_limit
-
 
         def do_create(count, params):
             results = []
@@ -1452,11 +1387,6 @@ class DockerManager(object):
         return containers
 
     def start_containers(self, containers):
-        params = {}
-
-        if not self.ensure_capability('host_config', fail=False):
-            params = self.get_start_params()
-
         for i in containers:
             self.client.start(i)
             self.increment_counter('started')
@@ -1504,7 +1434,6 @@ class ContainerSet:
         Update our view of the matching containers from the Docker daemon.
         '''
 
-
         self.deployed = self.manager.get_deployed_containers()
         self.running = [c for c in self.deployed if is_running(c)]
 
@@ -1541,6 +1470,7 @@ def present(manager, containers, count, name):
         manager.remove_containers(to_remove)
         containers.notice_changed(to_remove)
 
+
 def started(manager, containers, count, name):
     '''Ensure that exactly `count` matching containers exist and are running.'''
 
@@ -1563,6 +1493,7 @@ def started(manager, containers, count, name):
         manager.remove_containers(excess)
         containers.notice_changed(excess)
 
+
 def reloaded(manager, containers, count, name):
     '''
     Ensure that exactly `count` matching containers exist and are
@@ -1578,6 +1509,7 @@ def reloaded(manager, containers, count, name):
 
     started(manager, containers, count, name)
 
+
 def restarted(manager, containers, count, name):
     '''
     Ensure that exactly `count` matching containers exist and are
@@ -1589,6 +1521,7 @@ def restarted(manager, containers, count, name):
     manager.restart_containers(containers.running)
     started(manager, containers, count, name)
 
+
 def stopped(manager, containers, count, name):
     '''Stop any matching containers that are running.'''
 
@@ -1596,6 +1529,7 @@ def stopped(manager, containers, count, name):
 
     manager.stop_containers(containers.running)
     containers.notice_changed(containers.running)
+
 
 def killed(manager, containers, count, name):
     '''Kill any matching containers that are running.'''
@@ -1605,6 +1539,7 @@ def killed(manager, containers, count, name):
     manager.kill_containers(containers.running)
     containers.notice_changed(containers.running)
 
+
 def absent(manager, containers, count, name):
     '''Stop and remove any matching containers.'''
 
@@ -1613,6 +1548,7 @@ def absent(manager, containers, count, name):
     manager.stop_containers(containers.running)
     manager.remove_containers(containers.deployed)
     containers.notice_changed(containers.deployed)
+
 
 def main():
     module = AnsibleModule(
