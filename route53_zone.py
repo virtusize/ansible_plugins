@@ -50,7 +50,6 @@ extends_documentation_fragment: aws
 author: "Christopher Troup (@minichate)"
 '''
 
-import time
 
 try:
     import boto
@@ -71,13 +70,18 @@ def main():
             vpc_id=dict(default=None),
             vpc_region=dict(default=None),
             comment=dict(default=''),
-        )
+        ),
+        supports_check_mode=True
     )
 
     if not HAS_BOTO:
         module.fail_json(msg='boto required for this module')
 
     zone_in = module.params.get('zone').lower()
+
+    if zone_in[-1:] != '.':
+        zone_in += "."
+
     state = module.params.get('state').lower()
     vpc_id = module.params.get('vpc_id')
     vpc_region = module.params.get('vpc_region')
@@ -104,7 +108,7 @@ def main():
             if isinstance(zone_details['VPCs'], dict):
                 if zone_details['VPCs']['VPC']['VPCId'] == vpc_id:
                     zones[r53zone['Name']] = zone_id
-            else: # Forward compatibility for when boto fixes that bug
+            else:  # Forward compatibility for when boto fixes that bug
                 if vpc_id in [v['VPCId'] for v in zone_details['VPCs']]:
                     zones[r53zone['Name']] = zone_id
         else:
@@ -144,15 +148,17 @@ def main():
         module.exit_json(changed=False, set=record)
 
     elif state == 'present':
-        result = conn.create_hosted_zone(zone_in, **record)
-        hosted_zone = result['CreateHostedZoneResponse']['HostedZone']
-        zone_id = hosted_zone['Id'].replace('/hostedzone/', '')
-        record['zone_id'] = zone_id
-        record['name'] = zone_in
+        if not module.check_mode:
+            result = conn.create_hosted_zone(zone_in, **record)
+            hosted_zone = result['CreateHostedZoneResponse']['HostedZone']
+            zone_id = hosted_zone['Id'].replace('/hostedzone/', '')
+            record['zone_id'] = zone_id
+            record['name'] = zone_in
         module.exit_json(changed=True, set=record)
 
     elif state == 'absent' and zone_in in zones:
-        conn.delete_hosted_zone(zones[zone_in])
+        if not module.check_mode:
+            conn.delete_hosted_zone(zones[zone_in])
         module.exit_json(changed=True)
 
     elif state == 'absent':
